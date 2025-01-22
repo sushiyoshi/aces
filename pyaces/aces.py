@@ -184,31 +184,25 @@ class ArithChannel(object):
     e = []
     lvl_e = []
     for i in range(self.N):
-      k = anchor(i)  # 適当に 0~5 など
+      k = anchor(i)  
       randpoly = Polynomial.random(self.intmod,self.dim)
-      
-      # p*k - randpoly(1) を mod intmod で整形
-      #  => p*kは self.vanmod*k を意味
+
       diff_val = ((self.vanmod * k) % self.intmod - randpoly(arg=1)) % self.intmod
 
       shift = Polynomial.randshift(diff_val, self.intmod, self.dim)
       poly_e = (shift + randpoly).mod(self.intmod)
       e.append(poly_e)
-      lvl_e.append(k)  # レベル寄与など
+      lvl_e.append(k) 
       # print(f"[C](e)={(shift + randpoly)(arg=1) % self.intmod}") # 実行した結果，問題なし
     return e, lvl_e
   def generate_initializer(self):
     """
-    initializer f0 の各行が (少なくとも1つの) 素因数 q_factor の倍数となるように生成する．
+    Generate initializer f0 such that each row of f0 is a multiple of (at least one) prime factor q_factor.
     """
     # たとえば q の素因数を1つ取り出して固定する
     prime_factors = factor_intmod(self.intmod)
-    # デモとして最初の素因数をひとつだけ選ぶ:
-    # (本来は行ごとに異なる prime factor を使う，あるいは σ に基づいて
-    #  切り替えるなども可)
     if len(prime_factors)==0:
-        raise ValueError("self.intmod の素因数分解に失敗，または素数でない可能性")
-
+        raise ValueError("Failure to prime factorize: ", self.intmod)
     f0 = []
     for _ in range(self.N):
         row = []
@@ -405,16 +399,10 @@ class ACESReader(object):
     test_print("[C]((-c))^T[C]((x))",C_cdec_T_x_sum % self.intmod ,-sum % self.intmod)
     test_print(f"([C](c_enc) + ([C]((-c))^T[C]((x))mod q)  < q({C_enc} + {C_cdec_T_x_sum % self.intmod}={C_enc+C_cdec_T_x_sum % self.intmod}<{self.intmod})",C_enc+C_cdec_T_x_sum % self.intmod < self.intmod,True)
     current = C_enc + C_cdec_T_x_sum % self.intmod
-    l=0
-    while current >= self.intmod:
-      current -= self.intmod
-      l+=1
-    print(f"l={l}")
     # \pi_p \circle \iota_q \circle ([C](c')+[C]((-c))^T[C]((x)))
     test_print("([C](c_enc) + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum) % self.intmod % self.vanmod,correct_m)
     # \pi_p \circle \iota_q \circle [C](c')+ \pi_p (\circle \iota_q \circle [C])((-c))^T (\pi_p \circle \iota_q \circle [C])((x)))
     test_print("[C](c_enc) mod q + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum % self.intmod) % self.vanmod,correct_m)
-    test_print("([C](c_enc) mod q + [C]((-c))^T[C]((x)) mod q - lq) mod p",current % self.vanmod,correct_m)
 
     return correct_m
 def test_print(str, calc_val, expected_val):
@@ -424,8 +412,6 @@ def test_print(str, calc_val, expected_val):
   else:
     # 赤で表示
     print(f"\033[31m{str}: {calc_val} == {expected_val} ? {calc_val == expected_val}\033[0m")
-
-
 
 from pyaces.compaces import read_operations
 
@@ -480,14 +466,6 @@ class ACESRefresher(object):
     return lambda a: read_operations(self,instruction,a)
   
   def generate_refresher(self,ac,secret):
-    # refresher_ciph = []
-    # for i in range(self.dim):
-    #   xi_1 = secret[i](arg=1) % self.intmod
-    #   msg_p = xi_1 % self.vanmod
-
-    #   ciph, _,_ = self.ac.encrypt(msg_p)
-    #   refresher_ciph.append(ciph)
-    # return refresher_ciph
     secret_q = []
     for i in range(self.dim):
       xi = Polynomial(secret[i].coefs,self.intmod)
@@ -498,34 +476,33 @@ class ACESRefresher(object):
     return list(refresher_cipher_text),list(refresher_cipher_noise)
 
   def refresh(self,cipher,secret):
-    # 1. secret の各成分 x_i を暗号化(= refresher)
+    # 1. Encrypt each component x_i of secret (= refresher)
     refresher_cipher_text, refresher_cipher_noise = self.generate_refresher(self.ac, secret)
 
-    # 2. 暗号文 cipher の pseudociphertext (c0, c1) を取り出す
+    # 2. Extract pseudociphertext (c0, c1) of ciphertext cipher
     pseudociper_c0, pseudociper_c1 = self.pseudocipertext(cipher) 
 
-    # 3. c0 の各成分を integer化+mod整形
+    # 3.integerize each component of c0+mod formatted
     pseudociper_c0 = [self.gamma_1(p) for p in pseudociper_c0] # \gamma1 [C](-ci)
     pseudociper_c0_enc_list = [self.ac.encrypt(pseudociper_c0[i]) for i in range(len(pseudociper_c0))]
     pseudociper_c0_enc_text_list, pseudociper_c0_enc_noise_list = [], []
     for txt, ns in pseudociper_c0_enc_list:
         pseudociper_c0_enc_text_list.append(txt)
         pseudociper_c0_enc_noise_list.append(ns)
-    # 4. c1 (スカラー) も暗号化
+    # 4. c1 (scalar) encrypted
     pseudociper_c1 = self.gamma_1(pseudociper_c1) # \gamma1 [C](c')
     pseudociper_c1_enc_text, pseudociper_c1_enc_noise = self.ac.encrypt(pseudociper_c1) 
 
-    # 5. scalar product( c0_enc_list, refresher_cipher_text ) を計算
+    # 5. Calculates scalar product( c0_enc_list, refresher_cipher_text )
     scalar_product_result_text = self.scalar_product(pseudociper_c0_enc_text_list,
                                                      refresher_cipher_text)
-    # 6. 上記 + c1_enc_text を homomorphic add
+    # 6. above + c1_enc_text to homomorphic add
     result = self.algebra.add(pseudociper_c1_enc_text, scalar_product_result_text)
 
-    # デバッグ用表示
     print(f"refresher_cipher_noise:{refresher_cipher_noise}")
     print(f"pseudociper_c1_enc_noise:{pseudociper_c1_enc_noise}")
 
-    # 7. kappa0計算部分
+    # 7.
     # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))\\
     # \kappa_1 &= \displaystyle \left\lfloor \frac{(p-1) + n(p-1)^2}{p} \right\rfloor
     kappa0 = self.vanmod * (
@@ -554,6 +531,9 @@ class ACESRefresher(object):
     # \]
     C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in cipher.dec]
     C_enc = cipher.enc(arg=1)
+    print(f"C_negative_dec:{C_negative_dec}")
+    print(f"C_enc:{C_enc}")
+
     return C_negative_dec, C_enc
   def gamma_1(self,zq):
     return zq % self.vanmod % self.intmod
@@ -564,17 +544,18 @@ class ACESRefresher(object):
     ps_c1 = ps_c1 % self.intmod
 
     C_x = [(Polynomial(xi.coefs,self.intmod) % self.u)(arg=1) for xi in secret]
-    # "[C]((-c))^T[C]((x))を求める．
+    # Compute [C]((-c))^T[C]((x))
     C_c_x_sum = 0
     for i in range(self.dim):
       C_c_x_sum += ps_c0[i] * C_x[i]
-    rvalue = (ps_c1 + C_c_x_sum) % self.intmod % self.vanmod
-    C_c_x_sum_modp = 0
-    for i in range(self.dim):
-      C_c_x_sum_modp += ps_c0[i] * C_x[i]
-    lvalue = ps_c1 % self.vanmod + C_c_x_sum_modp % self.vanmod
-    # print(f"lvalue:{lvalue},rvalue:{rvalue}")
-    return lvalue == rvalue
+    rvalue = (ps_c1 + C_c_x_sum) % self.intmod
+    lvalue = ps_c1 + C_c_x_sum
+    lvalue_kpq = lvalue % (self.vanmod * self.intmod)
+    print(f"lvalue:{lvalue},lvalue_kpq:{lvalue_kpq},rvalue:{rvalue}")
+    rvalue2 = rvalue % self.vanmod
+    lvalue2 = ps_c1 % self.vanmod + C_c_x_sum % self.vanmod
+    print(f"lvalue2:{lvalue2},rvalue2:{rvalue2}")
+    return lvalue2 == rvalue2
 
 def prime_factorization(q: int) -> list:
     """

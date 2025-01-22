@@ -7,6 +7,9 @@ def test_refresh():
     dim = 5
     N = 5
     ac = ArithChannel(p,q,dim,N)
+    print("[*] p,q,dim,N =", p,q,dim,N)
+    q_p = q/p
+    print("[*] q/p =", q_p)
 
     f0,f1,vanmod,intmod,dim_,N_,u,tensor = ac.publish(fhe=True)
     bob = ACES(f0,f1,vanmod,intmod,dim_,N_,u)
