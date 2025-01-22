@@ -199,7 +199,6 @@ class ArithChannel(object):
     """
     Generate initializer f0 such that each row of f0 is a multiple of (at least one) prime factor q_factor.
     """
-    # たとえば q の素因数を1つ取り出して固定する
     prime_factors = factor_intmod(self.intmod)
     if len(prime_factors)==0:
         raise ValueError("Failure to prime factorize: ", self.intmod)
@@ -208,9 +207,7 @@ class ArithChannel(object):
         row = []
         for _ in range(self.dim):
             q_factor = prime_factors[random.randrange(len(prime_factors))]
-            # ランダムな多項式を1つ生成
             randpoly = Polynomial.random(self.intmod, self.dim)
-            # それを q_factor倍 してから u で割った剰余を取る ( = mod self.u )
             multiplied = Polynomial(
                 [(q_factor * c) % self.intmod for c in randpoly.coefs],
                 self.intmod
@@ -276,7 +273,7 @@ class ArithChannel(object):
       x.append(Polynomial(list(m_t[k]),self.intmod))
     tensor = []
     # we will have a list/array: tensor[i][j][k]
-    # e_{i,j} \in \mathbb{Z}_q[X]_u,[C](e) = 0 mod q, 暗号生成時のノイズ項のeとは異なる([C](e) \in {0,p})
+    # e_{i,j} \in \mathbb{Z}_q[X]_u,[C](e) = 0 mod q
     for i in range(len(x)):
       row = []
       for j in range(len(x)):
@@ -384,26 +381,6 @@ class ACESReader(object):
       sum = (sum + c.dec[i](arg=1) * self.x[i](arg=1) ) % self.intmod
     m_pre = c.enc + Polynomial([-1],self.intmod) * cTx
     correct_m = ( m_pre(arg=1) % self.intmod ) % self.vanmod
-    test_print("cTx(arg=1)==sum",sum % self.intmod,cTx(arg=1))
-    test_print("-cTx(arg=1)=-sum",-sum % self.intmod,(Polynomial([-1],self.intmod)* cTx)(arg=1))
-    test_print(f"c.enc(arg=1)+ (-sum mod q) < q ({c.enc(arg=1)} + {-sum%self.intmod} = {c.enc(arg=1)+(-sum%self.intmod)}<{self.intmod})",c.enc(arg=1)+(-sum%self.intmod)< self.intmod, True)
-    test_print("c.enc(arg=1) mod p + (- cTx(arg=1) mod p)",(c.enc(arg=1) % self.vanmod + (- cTx(arg=1) % self.vanmod)) % self.vanmod,correct_m)
-    # "[C]((-c))^T[C]((x))を求める．
-    C_x = [(Polynomial(xi.coefs,self.intmod))(arg=1) for xi in self.x] # [C]((x)) = [C]((x_1)),...,[C]((x_n)) \in \mathbb{Z}_q^n
-    C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in c.dec] # [C]((-c)) = [C]((-c_1)),...,[C]((-c_n)) \in \mathbb{Z}_q^n
-    C_enc = (c.enc)(arg=1) # [C](c') \in \mathbb{Z}_q
-    C_cdec_T_x_sum = 0 # [C]((-c))^T[C]((x)) = \sum_{i=1}^n [C](-c_i)[C](x_i) \in \mathbb{Z}_q
-    for i in range(self.dim):
-      C_cdec_T_x_sum = (C_cdec_T_x_sum + C_negative_dec[i] * C_x[i])
-    test_print("[C](c_enc)",C_enc,c.enc(arg=1))
-    test_print("[C]((-c))^T[C]((x))",C_cdec_T_x_sum % self.intmod ,-sum % self.intmod)
-    test_print(f"([C](c_enc) + ([C]((-c))^T[C]((x))mod q)  < q({C_enc} + {C_cdec_T_x_sum % self.intmod}={C_enc+C_cdec_T_x_sum % self.intmod}<{self.intmod})",C_enc+C_cdec_T_x_sum % self.intmod < self.intmod,True)
-    current = C_enc + C_cdec_T_x_sum % self.intmod
-    # \pi_p \circle \iota_q \circle ([C](c')+[C]((-c))^T[C]((x)))
-    test_print("([C](c_enc) + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum) % self.intmod % self.vanmod,correct_m)
-    # \pi_p \circle \iota_q \circle [C](c')+ \pi_p (\circle \iota_q \circle [C])((-c))^T (\pi_p \circle \iota_q \circle [C])((x)))
-    test_print("[C](c_enc) mod q + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum % self.intmod) % self.vanmod,correct_m)
-
     return correct_m
 def test_print(str, calc_val, expected_val):
   if(calc_val == expected_val):
@@ -472,50 +449,54 @@ class ACESRefresher(object):
       secret_q.append(xi)
     refresher_secret = [(xi % ac.u)(arg=1) % ac.intmod % ac.vanmod for xi in secret_q]
     refresher_cipher_result = [ac.encrypt(r) for r in refresher_secret]
-    refresher_cipher_text,refresher_cipher_noise = zip(*refresher_cipher_result)
-    return list(refresher_cipher_text),list(refresher_cipher_noise)
+    refresher_cipher_cipher,refresher_cipher_noise = zip(*refresher_cipher_result)
+    return list(refresher_cipher_cipher),list(refresher_cipher_noise)
 
   def refresh(self,cipher,secret):
     # 1. Encrypt each component x_i of secret (= refresher)
-    refresher_cipher_text, refresher_cipher_noise = self.generate_refresher(self.ac, secret)
+    refresher_cipher_cipher, refresher_cipher_noise = self.generate_refresher(self.ac, secret)
 
     # 2. Extract pseudociphertext (c0, c1) of ciphertext cipher
-    pseudociper_c0, pseudociper_c1 = self.pseudocipertext(cipher) 
+    pse_c0, pse_c1 = self.generate_pseudocipertext(cipher) 
 
     # 3.integerize each component of c0+mod formatted
-    pseudociper_c0 = [self.gamma_1(p) for p in pseudociper_c0] # \gamma1 [C](-ci)
-    pseudociper_c0_enc_list = [self.ac.encrypt(pseudociper_c0[i]) for i in range(len(pseudociper_c0))]
-    pseudociper_c0_enc_text_list, pseudociper_c0_enc_noise_list = [], []
-    for txt, ns in pseudociper_c0_enc_list:
-        pseudociper_c0_enc_text_list.append(txt)
-        pseudociper_c0_enc_noise_list.append(ns)
+    pse_c0 = [self.gamma_1(p) for p in pse_c0] # \gamma1 [C](-ci)
+    pse_c0_enc_tuple = [self.ac.encrypt(pse_c0[i]) for i in range(len(pse_c0))]
+    pse_c0_enc_cipher_tuple, pse_c0_enc_noise_tuple = [], []
+    for txt, ns in pse_c0_enc_tuple:
+        pse_c0_enc_cipher_tuple.append(txt)
+        pse_c0_enc_noise_tuple.append(ns)
     # 4. c1 (scalar) encrypted
-    pseudociper_c1 = self.gamma_1(pseudociper_c1) # \gamma1 [C](c')
-    pseudociper_c1_enc_text, pseudociper_c1_enc_noise = self.ac.encrypt(pseudociper_c1) 
+    pse_c1 = self.gamma_1(pse_c1) # \gamma1 [C](c')
+    pse_c1_enc_cipher, pse_c1_enc_noise = self.ac.encrypt(pse_c1) 
 
-    # 5. Calculates scalar product( c0_enc_list, refresher_cipher_text )
-    scalar_product_result_text = self.scalar_product(pseudociper_c0_enc_text_list,
-                                                     refresher_cipher_text)
-    # 6. above + c1_enc_text to homomorphic add
-    result = self.algebra.add(pseudociper_c1_enc_text, scalar_product_result_text)
+    # 5. Calculates scalar product( c0_enc_tuple, refresher_cipher_cipher )
+    scalar_product_result_cipher = self.scalar_product(pse_c0_enc_cipher_tuple,
+                                                     refresher_cipher_cipher)
+    # 6. above + c1_enc_cipher to homomorphic add
+    result = self.algebra.add(pse_c1_enc_cipher, scalar_product_result_cipher)
 
-    print(f"refresher_cipher_noise:{refresher_cipher_noise}")
-    print(f"pseudociper_c1_enc_noise:{pseudociper_c1_enc_noise}")
+    # print(f"refresher_cipher_noise:{refresher_cipher_noise}")
+    # print(f"pse_c1_enc_noise:{pse_c1_enc_noise}")
 
     # 7.
-    # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))\\
-    # \kappa_1 &= \displaystyle \left\lfloor \frac{(p-1) + n(p-1)^2}{p} \right\rfloor
+    # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))
     kappa0 = self.vanmod * (
-        sum(pseudociper_c1_enc_noise)
+        sum(pse_c1_enc_noise)
         + sum(sum(noise) for noise in refresher_cipher_noise) 
-        + sum(sum(ns) for ns in pseudociper_c0_enc_noise_list)
-        + sum(sum(rf_noise)*sum(c0_noise) for rf_noise,c0_noise in zip(refresher_cipher_noise,pseudociper_c0_enc_noise_list))
+        + sum(sum(ns) for ns in pse_c0_enc_noise_tuple)
+        + sum(sum(rf_noise)*sum(c0_noise) for rf_noise,c0_noise in zip(refresher_cipher_noise,pse_c0_enc_noise_tuple))
     )
+    # \kappa_1 &= \displaystyle \left\lfloor \frac{(p-1) + n(p-1)^2}{p} \right\rfloor
     kappa1 = int(((self.vanmod - 1) + self.dim*(self.vanmod - 1)**2) / self.vanmod)
     print(f"kappa0:{kappa0},kappa1:{kappa1}")
 
     new_uplvl = kappa0 + kappa1
-    print(f"new_uplvl:{new_uplvl},new_uplvl < (q+1)/p-1 : {new_uplvl} < {(self.intmod+1)/self.vanmod-1} :{new_uplvl < (self.intmod+1)/self.vanmod-1}")
+    if new_uplvl < (self.intmod+1)/self.vanmod-1:
+      print("\033[32mOK:")
+    else:
+      print("\033[31mNG:")
+    print(f"new_uplvl:{new_uplvl},new_uplvl < (q+1)/p-1 : {new_uplvl} < {(self.intmod+1)/self.vanmod-1}\033[0m")
     return ACESCipher(result.dec, result.enc, new_uplvl)
 
   def scalar_product(self,a,b):
@@ -524,22 +505,19 @@ class ACESRefresher(object):
       current = self.algebra.add(current,self.algebra.mult(a[i],b[i]))
     return current
   
-  def pseudocipertext(self,cipher:ACESCipher):
+  def generate_pseudocipertext(self,cipher:ACESCipher):
     #Here, the $n$-tuple $\intbrackets{\mathsf{C}}\tuplebrk{-c}$ is the tuple whose $i$-th coefficient is given by the following element in $\mathbb{Z}_q$.
     # \[
     # \intbrackets{\mathsf{C}}(-c_i) = -\intbrackets{\mathsf{C}}(c_i) = \pi_q(q - \iota_q(\intbrackets{\mathsf{C}}(c_i)))
     # \]
     C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in cipher.dec]
     C_enc = cipher.enc(arg=1)
-    print(f"C_negative_dec:{C_negative_dec}")
-    print(f"C_enc:{C_enc}")
-
     return C_negative_dec, C_enc
   def gamma_1(self,zq):
     return zq % self.vanmod % self.intmod
 
   def is_refreshable(self,cipher,secret):
-    ps_c0, ps_c1 = self.pseudocipertext(cipher)
+    ps_c0, ps_c1 = self.generate_pseudocipertext(cipher)
     ps_c0 = [p % self.intmod for p in ps_c0]
     ps_c1 = ps_c1 % self.intmod
 
@@ -551,47 +529,13 @@ class ACESRefresher(object):
     rvalue = (ps_c1 + C_c_x_sum) % self.intmod
     lvalue = ps_c1 + C_c_x_sum
     lvalue_kpq = lvalue % (self.vanmod * self.intmod)
-    print(f"lvalue:{lvalue},lvalue_kpq:{lvalue_kpq},rvalue:{rvalue}")
+    # print(f"lvalue:{lvalue},lvalue_kpq:{lvalue_kpq},rvalue:{rvalue}")
     rvalue2 = rvalue % self.vanmod
     lvalue2 = ps_c1 % self.vanmod + C_c_x_sum % self.vanmod
-    print(f"lvalue2:{lvalue2},rvalue2:{rvalue2}")
+    # print(f"lvalue2:{lvalue2},rvalue2:{rvalue2}")
     return lvalue2 == rvalue2
 
-def prime_factorization(q: int) -> list:
-    """
-    整数 q を素因数分解し、素因数を昇順に格納したリストを返す関数
-    例）q = 12 -> [2, 2, 3]
-    """
-    factors = []
-    num = q
-
-    # まず2で割り切れるだけ割り続ける
-    while num % 2 == 0:
-        factors.append(2)
-        num //= 2
-
-    # 3以上の奇数で割り続ける
-    # i*i <= num の間、iを1ずつ増やしながら試す
-    i = 3
-    while i * i <= num:
-        while num % i == 0:
-            factors.append(i)
-            num //= i
-        i += 2
-
-    # 最後に残った num が1でなければ、それが素因数
-    if num > 1:
-        factors.append(num)
-
-    return factors
-
 def factor_intmod(q):
-    """
-    q を素因数分解して，得られた素因数のリストを返す仮の関数．
-    ここでは簡易的実装や外部ライブラリ呼び出しを想定してください．
-    """
-    # 例: ここでは超簡単な trial division で実装 (大きい q には非効率)
-    # 必要に応じて適宜置き換えてください
     factors = []
     x = q
     d = 2
