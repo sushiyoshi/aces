@@ -1,4 +1,5 @@
 import random
+import math
 
 def degree(p):
   for i,c in enumerate(p.coefs[::-1]):
@@ -100,20 +101,16 @@ def randinverse(intmod):
   _, inva, k = extended_gcd(a,intmod)
   return (a,inva % intmod)
 
-
 import numpy as np
 
 class RandIso(object):
-
   def __init__(self,intmod,dim):
     self.intmod = intmod
     self.dim = dim
-
   def generate_pair(self):
     i = random.randrange(self.dim)
     j = random.choice([k for k in range(self.dim) if k!=i])
     return i,j
-
   def generate_swap(self):
     i,j = self.generate_pair()
     m = []
@@ -125,7 +122,6 @@ class RandIso(object):
       else:
         m.append([(1 if s==r else 0) for s in range(self.dim)])
     return np.array(m)
-        
   def generate_mult(self):
     m = []
     invm = []
@@ -134,7 +130,6 @@ class RandIso(object):
       m.append([(a if s==r else 0) for s in range(self.dim)])
       invm.append([(inva if s==r else 0) for s in range(self.dim)])
     return np.array(m), np.array(invm)
-
   def generate_line(self):
     i,j = self.generate_pair()
     m = []
@@ -144,7 +139,6 @@ class RandIso(object):
       m.append([(1 if s==r else ( a if r==i and s==j else 0)) for s in range(self.dim)])
       invm.append([(1 if s==r else ( self.intmod-a if r==i and s==j else 0)) for s in range(self.dim)])
     return np.array(m), np.array(invm)
-
   def generate(self,length,pswap=1,pmult=2,pline=3):
     u = np.eye(self.dim, dtype=int)
     invu = np.eye(self.dim, dtype=int)
@@ -160,9 +154,7 @@ class RandIso(object):
       u = (m @ u) % self.intmod
       invu = (invu @ invm) % self.intmod
     return (u % self.intmod), (invu % self.intmod)
-
 class ArithChannel(object):
-
   #dim is both n = dim(x) and degre(u)
   def __init__(self,
                 vanmod,
@@ -181,35 +173,60 @@ class ArithChannel(object):
        self.vanmod = vanmod
        self.intmod = vanmod**2+1
     self.dim = dim
+    self.q_list = factor_intmod(self.intmod)
+    print(f"q_list={self.q_list}")
     self.u = self.generate_u()
     self.x, self.tensor = self.generate_secret(self.u)
     self.f0 = self.generate_initializer()
-    self.f1, self.lvl_e = self.generate_noisy_key(anchor=anchor)
+    self.f1, self.lvl_e,self.e = self.generate_noisy_key(anchor=anchor)
 
-  def generate_vanisher(self,anchor = lambda v : 0 if random.uniform(0,1) < 0.5 else 1):
+  def generate_vanisher(self, anchor = lambda i: random.randint(0,5)):
     e = []
     lvl_e = []
     for i in range(self.N):
-      k = anchor(i)
-      lvl_e.append(k)
+      k = anchor(i)  # 適当に 0~5 など
       randpoly = Polynomial.random(self.intmod,self.dim)
-      shift = Polynomial.randshift(self.vanmod * k - randpoly(arg=1),self.intmod,self.dim)
-      e.append(shift + randpoly)
+      
+      # p*k - randpoly(1) を mod intmod で整形
+      #  => p*kは self.vanmod*k を意味
+      diff_val = ((self.vanmod * k) % self.intmod - randpoly(arg=1)) % self.intmod
+
+      shift = Polynomial.randshift(diff_val, self.intmod, self.dim)
+      poly_e = (shift + randpoly).mod(self.intmod)
+      e.append(poly_e)
+      lvl_e.append(k)  # レベル寄与など
+      # print(f"[C](e)={(shift + randpoly)(arg=1) % self.intmod}") # 実行した結果，問題なし
     return e, lvl_e
-
   def generate_initializer(self):
-    f0 = []
-    # divisor of self.intmod
-    for _ in range(self.N):
-      row = []
-      for _ in range(self.dim):
-        k = random.randrange(self.intmod)
-        randpoly = Polynomial.random(self.intmod,self.dim)
-        shift = Polynomial.randshift(self.vanmod * k - randpoly(arg=1),self.intmod,self.dim)
-        row.append(shift + randpoly)
-      f0.append(row)
-    return f0
+    """
+    initializer f0 の各行が (少なくとも1つの) 素因数 q_factor の倍数となるように生成する．
+    """
+    # たとえば q の素因数を1つ取り出して固定する
+    prime_factors = factor_intmod(self.intmod)
+    # デモとして最初の素因数をひとつだけ選ぶ:
+    # (本来は行ごとに異なる prime factor を使う，あるいは σ に基づいて
+    #  切り替えるなども可)
+    if len(prime_factors)==0:
+        raise ValueError("self.intmod の素因数分解に失敗，または素数でない可能性")
 
+    f0 = []
+    for _ in range(self.N):
+        row = []
+        for _ in range(self.dim):
+            q_factor = prime_factors[random.randrange(len(prime_factors))]
+            # ランダムな多項式を1つ生成
+            randpoly = Polynomial.random(self.intmod, self.dim)
+            # それを q_factor倍 してから u で割った剰余を取る ( = mod self.u )
+            multiplied = Polynomial(
+                [(q_factor * c) % self.intmod for c in randpoly.coefs],
+                self.intmod
+            )
+            # f0[i][j] = ( q_factor * randpoly ) mod u
+            row.append( multiplied % self.u )
+            # test
+            self.test(multiplied % self.u)
+        f0.append(row)
+    return f0
   def generate_noisy_key(self,anchor = lambda v : 0 if random.uniform(0,1) < 0.5 else 1):
     f1 = [Polynomial([0],self.intmod) for _ in range(self.N)]
     e, lvl_e = self.generate_vanisher(anchor = anchor)
@@ -217,7 +234,7 @@ class ArithChannel(object):
       for j in range(self.dim):
         f1[i] = (f1[i] + self.f0[i][j] * self.x[j]) % self.u
       f1[i] = f1[i] + e[i]
-    return f1, lvl_e
+    return f1, lvl_e,e
     
   def publish(self,fhe = False):
     if fhe:
@@ -247,14 +264,12 @@ class ArithChannel(object):
       samp = max(0,min(remaining,int(random.gauss(remaining/2,remaining/2))))
       decomp.append(random.randint(0,samp))
       remaining = zeros-sum(decomp)
-    
     u = []
     for i in range(len(u_coefs)):
       u.append(u_coefs[i])
       if i < len(decomp):
         u.extend([0] * decomp[i])
     u.extend([0] * (self.dim - len(u)+1))
-    
     return Polynomial(u[::-1],self.intmod)
 
   def generate_secret(self,poly_u):
@@ -265,35 +280,52 @@ class ArithChannel(object):
     m_t = np.transpose(m)
     for k in range(len(m)):
       x.append(Polynomial(list(m_t[k]),self.intmod))
-
     tensor = []
     # we will have a list/array: tensor[i][j][k]
+    # e_{i,j} \in \mathbb{Z}_q[X]_u,[C](e) = 0 mod q, 暗号生成時のノイズ項のeとは異なる([C](e) \in {0,p})
     for i in range(len(x)):
       row = []
       for j in range(len(x)):
         xi_xj_mod_u = (x[i] * x[j]) % poly_u
         a_ij_poly = xi_xj_mod_u.mod(self.intmod)
-
         if sum(a_ij_poly.coefs[self.dim:]) != 0:
           print("Error in ArithChannel.generate_secret: tensor cannot be computed due to dimension discrepancies")
           print(a_ij_poly)
           exit()
-
         a_ij = np.array(a_ij_poly.coefs[:self.dim] + [0] * (self.dim - len(a_ij_poly.coefs)) )
-        row.append((invm @ a_ij) % self.intmod)
+        result =(invm @ a_ij) % self.intmod
+        result[-1] = 4051*251
+        flag = False
+        for lamb in result:
+          for q_i in self.q_list:
+            if lamb % q_i == 0:
+              flag = True
+              # print("割り切れる素因数:", q_i)
+              break
+        if not flag:
+          print("\033[31m割り切れる素因数が見つかりませんでした\033[0m")
+          
+        row.append(result)
       tensor.append(np.array(row))
-    
     return x, np.array(tensor)
-
-
+  def test(self,zx):
+    result = (zx)(arg=1)
+    # print(f"[C](f0_i)={result % self.intmod}")
+    flag = False
+    for sigmaq in self.q_list:
+      if result % sigmaq == 0:
+        # print(f"[C](f0_i) is divisible by {sigmaq}")
+        flag = True
+        break
+    if not flag:
+      # テキストを赤くする
+      print(f"\033[31m割り切れませんでした\033[0m")
 class ACESCipher(object):
 
   def __init__(self,dec,enc,lvl):
     self.dec = dec
     self.enc = enc
     self.uplvl = lvl
-
-
 # Arithmetic Channel Ecnryption Scheme 
 class ACES(object):
 
@@ -310,15 +342,18 @@ class ACES(object):
     if m >= self.vanmod:
       print(f"Warning in ACES.encrypt: the input is equivalent to {m % self.vanmod}")
     b = self.generate_linear(anchor=anchor)
-    enc = self.generate_error(m)
-    for i in range(self.N):
-      enc = enc + (b[i] * self.f1[i]) % self.u
+    enc = self.generate_error(m) # r(m)
+    # print(f"[C](r(m))={enc(arg=1) % self.intmod},m={m}") # 実行した結果，問題なし
+    for i in range(len(b)):
+      enc = enc + (b[i] * self.f1[i]) % self.u # r(m) + b^T (f0+e) = r(m) + c
     dec = []
     for j in range(self.dim):
       dec_j = Polynomial([0],self.intmod)
       for i in range(self.N):
-        dec_j = dec_j + (b[i] * self.f0[i][j]) % self.u
+        dec_j = dec_j + (b[i] * self.f0[i][j]) % self.u # f_0^T b
       dec.append(dec_j)
+    
+    # return ACESCipher(dec,enc,self.N * self.vanmod) , [b[i](arg=1) for i in range(self.N)],b
     return ACESCipher(dec,enc,self.N * self.vanmod) , [b[i](arg=1) for i in range(self.N)]
 
   def generate_linear(self,anchor = lambda v,w: random.randint(0,w)):
@@ -327,14 +362,14 @@ class ACES(object):
       k = anchor(i,self.vanmod)
       randpoly = Polynomial.random(self.intmod,self.dim)
       shift = Polynomial.randshift(k - randpoly(arg=1),self.intmod,self.dim)
-      b.append(shift + randpoly)
+      # print(f"[C](bi)={(shift + randpoly)(arg=1)},[C](bi)<p:{(shift + randpoly)(arg=1) % self.intmod <= self.vanmod}") # 実行した結果，問題なし
+      b.append((shift + randpoly)%self.u)
     return b
 
   def generate_error(self,m):
     randpoly = Polynomial.random(self.intmod,self.dim)
     shift = Polynomial.randshift(m - randpoly(arg=1),self.intmod,self.dim)
     return shift + randpoly
-
 
 class ACESReader(object):
 
@@ -348,11 +383,47 @@ class ACESReader(object):
 
   def decrypt(self,c):
     cTx = Polynomial([0],self.intmod)
+    sum = 0
     for i in range(self.dim):
-      cTx = cTx + c.dec[i] * self.x[i]
-    
+      cTx += c.dec[i] * self.x[i] % self.u
+      # test code
+      sum = (sum + c.dec[i](arg=1) * self.x[i](arg=1) ) % self.intmod
     m_pre = c.enc + Polynomial([-1],self.intmod) * cTx
-    return ( m_pre(arg=1) % self.intmod ) % self.vanmod
+    correct_m = ( m_pre(arg=1) % self.intmod ) % self.vanmod
+    test_print("cTx(arg=1)==sum",sum % self.intmod,cTx(arg=1))
+    test_print("-cTx(arg=1)=-sum",-sum % self.intmod,(Polynomial([-1],self.intmod)* cTx)(arg=1))
+    test_print(f"c.enc(arg=1)+ (-sum mod q) < q ({c.enc(arg=1)} + {-sum%self.intmod} = {c.enc(arg=1)+(-sum%self.intmod)}<{self.intmod})",c.enc(arg=1)+(-sum%self.intmod)< self.intmod, True)
+    test_print("c.enc(arg=1) mod p + (- cTx(arg=1) mod p)",(c.enc(arg=1) % self.vanmod + (- cTx(arg=1) % self.vanmod)) % self.vanmod,correct_m)
+    # "[C]((-c))^T[C]((x))を求める．
+    C_x = [(Polynomial(xi.coefs,self.intmod))(arg=1) for xi in self.x] # [C]((x)) = [C]((x_1)),...,[C]((x_n)) \in \mathbb{Z}_q^n
+    C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in c.dec] # [C]((-c)) = [C]((-c_1)),...,[C]((-c_n)) \in \mathbb{Z}_q^n
+    C_enc = (c.enc)(arg=1) # [C](c') \in \mathbb{Z}_q
+    C_cdec_T_x_sum = 0 # [C]((-c))^T[C]((x)) = \sum_{i=1}^n [C](-c_i)[C](x_i) \in \mathbb{Z}_q
+    for i in range(self.dim):
+      C_cdec_T_x_sum = (C_cdec_T_x_sum + C_negative_dec[i] * C_x[i])
+    test_print("[C](c_enc)",C_enc,c.enc(arg=1))
+    test_print("[C]((-c))^T[C]((x))",C_cdec_T_x_sum % self.intmod ,-sum % self.intmod)
+    test_print(f"([C](c_enc) + ([C]((-c))^T[C]((x))mod q)  < q({C_enc} + {C_cdec_T_x_sum % self.intmod}={C_enc+C_cdec_T_x_sum % self.intmod}<{self.intmod})",C_enc+C_cdec_T_x_sum % self.intmod < self.intmod,True)
+    current = C_enc + C_cdec_T_x_sum % self.intmod
+    l=0
+    while current >= self.intmod:
+      current -= self.intmod
+      l+=1
+    print(f"l={l}")
+    # \pi_p \circle \iota_q \circle ([C](c')+[C]((-c))^T[C]((x)))
+    test_print("([C](c_enc) + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum) % self.intmod % self.vanmod,correct_m)
+    # \pi_p \circle \iota_q \circle [C](c')+ \pi_p (\circle \iota_q \circle [C])((-c))^T (\pi_p \circle \iota_q \circle [C])((x)))
+    test_print("[C](c_enc) mod q + [C]((-c))^T[C]((x)) mod q mod p",(C_enc + C_cdec_T_x_sum % self.intmod) % self.vanmod,correct_m)
+    test_print("([C](c_enc) mod q + [C]((-c))^T[C]((x)) mod q - lq) mod p",current % self.vanmod,correct_m)
+
+    return correct_m
+def test_print(str, calc_val, expected_val):
+  if(calc_val == expected_val):
+    # 緑で表示
+    print(f"\033[32m{str}: {calc_val} == {expected_val} ? {calc_val == expected_val}\033[0m")
+  else:
+    # 赤で表示
+    print(f"\033[31m{str}: {calc_val} == {expected_val} ? {calc_val == expected_val}\033[0m")
 
 
 
@@ -378,29 +449,26 @@ class ACESAlgebra(object):
       tmp = Polynomial([0],self.intmod)
       for i in range(self.dim):
         for j in range(self.dim):
-          tmp = tmp + Polynomial([self.tensor[i][j][k]],self.intmod) * a.dec[i] * b.dec[j]
+          tmp += Polynomial([self.tensor[i][j][k]],self.intmod) * a.dec[i] * b.dec[j]
       t.append(tmp)
-
-    c0 = [ ( b.enc * a.dec[k] +a.enc * b.dec[k] + Polynomial([-1],self.intmod) * t[k]) % self.u for k in range(self.dim) ]
-    c1 = ( a.enc * b.enc ) % self.u
-    return ACESCipher(c0, c1, a.uplvl*b.uplvl*self.vanmod)
-
-  def refresh(self,c,k):
-    return ACESCipher(c.dec, c.enc + Polynomial([- k * self.vanmod],self.intmod) , c.uplvl-k)
-
+    # t = c1 *\lambda c2
+    c0 = [ ( b.enc * a.dec[k] +a.enc * b.dec[k] + Polynomial([-1],self.intmod) * t[k]) % self.u for k in range(self.dim) ] # c2'c1+c1'c2-c1 *\lambda c2
+    c1 = ( a.enc * b.enc ) % self.u #c1'c2'
+    # return ACESCipher(c0, c1, a.uplvl*b.uplvl*self.vanmod)
+    return ACESCipher(c0, c1, (a.uplvl+b.uplvl+a.uplvl*b.uplvl)*self.vanmod)
+  
   def compile(self,instruction):
     return lambda a: read_operations(self,instruction,a)
 
-
 class ACESRefresher(object):
-
-  def __init__(self,ac):
+  def __init__(self,ac,algebra):
     self.vanmod = ac.vanmod
+    self.intmod = ac.intmod
+    self.dim = ac.dim
     self.N = ac.N
-    self.lvl_e = ac.lvl_e
-
-  def process(self,refresher_list):
-    return  [sum([a[i]* self.lvl_e[i] for i in range(self.N)]) for a in refresher_list]
+    self.u = ac.u
+    self.ac = ac
+    self.algebra = algebra
 
   def add(self,a,b):
     return a+b
@@ -410,4 +478,148 @@ class ACESRefresher(object):
 
   def compile(self,instruction):
     return lambda a: read_operations(self,instruction,a)
+  
+  def generate_refresher(self,ac,secret):
+    # refresher_ciph = []
+    # for i in range(self.dim):
+    #   xi_1 = secret[i](arg=1) % self.intmod
+    #   msg_p = xi_1 % self.vanmod
+
+    #   ciph, _,_ = self.ac.encrypt(msg_p)
+    #   refresher_ciph.append(ciph)
+    # return refresher_ciph
+    secret_q = []
+    for i in range(self.dim):
+      xi = Polynomial(secret[i].coefs,self.intmod)
+      secret_q.append(xi)
+    refresher_secret = [(xi % ac.u)(arg=1) % ac.intmod % ac.vanmod for xi in secret_q]
+    refresher_cipher_result = [ac.encrypt(r) for r in refresher_secret]
+    refresher_cipher_text,refresher_cipher_noise = zip(*refresher_cipher_result)
+    return list(refresher_cipher_text),list(refresher_cipher_noise)
+
+  def refresh(self,cipher,secret):
+    # 1. secret の各成分 x_i を暗号化(= refresher)
+    refresher_cipher_text, refresher_cipher_noise = self.generate_refresher(self.ac, secret)
+
+    # 2. 暗号文 cipher の pseudociphertext (c0, c1) を取り出す
+    pseudociper_c0, pseudociper_c1 = self.pseudocipertext(cipher) 
+
+    # 3. c0 の各成分を integer化+mod整形
+    pseudociper_c0 = [self.gamma_1(p) for p in pseudociper_c0] # \gamma1 [C](-ci)
+    pseudociper_c0_enc_list = [self.ac.encrypt(pseudociper_c0[i]) for i in range(len(pseudociper_c0))]
+    pseudociper_c0_enc_text_list, pseudociper_c0_enc_noise_list = [], []
+    for txt, ns in pseudociper_c0_enc_list:
+        pseudociper_c0_enc_text_list.append(txt)
+        pseudociper_c0_enc_noise_list.append(ns)
+    # 4. c1 (スカラー) も暗号化
+    pseudociper_c1 = self.gamma_1(pseudociper_c1) # \gamma1 [C](c')
+    pseudociper_c1_enc_text, pseudociper_c1_enc_noise = self.ac.encrypt(pseudociper_c1) 
+
+    # 5. scalar product( c0_enc_list, refresher_cipher_text ) を計算
+    scalar_product_result_text = self.scalar_product(pseudociper_c0_enc_text_list,
+                                                     refresher_cipher_text)
+    # 6. 上記 + c1_enc_text を homomorphic add
+    result = self.algebra.add(pseudociper_c1_enc_text, scalar_product_result_text)
+
+    # デバッグ用表示
+    print(f"refresher_cipher_noise:{refresher_cipher_noise}")
+    print(f"pseudociper_c1_enc_noise:{pseudociper_c1_enc_noise}")
+
+    # 7. kappa0計算部分
+    # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))\\
+    # \kappa_1 &= \displaystyle \left\lfloor \frac{(p-1) + n(p-1)^2}{p} \right\rfloor
+    kappa0 = self.vanmod * (
+        sum(pseudociper_c1_enc_noise)
+        + sum(sum(noise) for noise in refresher_cipher_noise) 
+        + sum(sum(ns) for ns in pseudociper_c0_enc_noise_list)
+        + sum(sum(rf_noise)*sum(c0_noise) for rf_noise,c0_noise in zip(refresher_cipher_noise,pseudociper_c0_enc_noise_list))
+    )
+    kappa1 = int(((self.vanmod - 1) + self.dim*(self.vanmod - 1)**2) / self.vanmod)
+    print(f"kappa0:{kappa0},kappa1:{kappa1}")
+
+    new_uplvl = kappa0 + kappa1
+    print(f"new_uplvl:{new_uplvl},new_uplvl < (q+1)/p-1 : {new_uplvl} < {(self.intmod+1)/self.vanmod-1} :{new_uplvl < (self.intmod+1)/self.vanmod-1}")
+    return ACESCipher(result.dec, result.enc, new_uplvl)
+
+  def scalar_product(self,a,b):
+    current = self.algebra.mult(a[0],b[0])
+    for i in range(1,len(a)):
+      current = self.algebra.add(current,self.algebra.mult(a[i],b[i]))
+    return current
+  
+  def pseudocipertext(self,cipher:ACESCipher):
+    #Here, the $n$-tuple $\intbrackets{\mathsf{C}}\tuplebrk{-c}$ is the tuple whose $i$-th coefficient is given by the following element in $\mathbb{Z}_q$.
+    # \[
+    # \intbrackets{\mathsf{C}}(-c_i) = -\intbrackets{\mathsf{C}}(c_i) = \pi_q(q - \iota_q(\intbrackets{\mathsf{C}}(c_i)))
+    # \]
+    C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in cipher.dec]
+    C_enc = cipher.enc(arg=1)
+    return C_negative_dec, C_enc
+  def gamma_1(self,zq):
+    return zq % self.vanmod % self.intmod
+
+  def is_refreshable(self,cipher,secret):
+    ps_c0, ps_c1 = self.pseudocipertext(cipher)
+    ps_c0 = [p % self.intmod for p in ps_c0]
+    ps_c1 = ps_c1 % self.intmod
+
+    C_x = [(Polynomial(xi.coefs,self.intmod) % self.u)(arg=1) for xi in secret]
+    # "[C]((-c))^T[C]((x))を求める．
+    C_c_x_sum = 0
+    for i in range(self.dim):
+      C_c_x_sum += ps_c0[i] * C_x[i]
+    rvalue = (ps_c1 + C_c_x_sum) % self.intmod % self.vanmod
+    C_c_x_sum_modp = 0
+    for i in range(self.dim):
+      C_c_x_sum_modp += ps_c0[i] * C_x[i]
+    lvalue = ps_c1 % self.vanmod + C_c_x_sum_modp % self.vanmod
+    # print(f"lvalue:{lvalue},rvalue:{rvalue}")
+    return lvalue == rvalue
+
+def prime_factorization(q: int) -> list:
+    """
+    整数 q を素因数分解し、素因数を昇順に格納したリストを返す関数
+    例）q = 12 -> [2, 2, 3]
+    """
+    factors = []
+    num = q
+
+    # まず2で割り切れるだけ割り続ける
+    while num % 2 == 0:
+        factors.append(2)
+        num //= 2
+
+    # 3以上の奇数で割り続ける
+    # i*i <= num の間、iを1ずつ増やしながら試す
+    i = 3
+    while i * i <= num:
+        while num % i == 0:
+            factors.append(i)
+            num //= i
+        i += 2
+
+    # 最後に残った num が1でなければ、それが素因数
+    if num > 1:
+        factors.append(num)
+
+    return factors
+
+def factor_intmod(q):
+    """
+    q を素因数分解して，得られた素因数のリストを返す仮の関数．
+    ここでは簡易的実装や外部ライブラリ呼び出しを想定してください．
+    """
+    # 例: ここでは超簡単な trial division で実装 (大きい q には非効率)
+    # 必要に応じて適宜置き換えてください
+    factors = []
+    x = q
+    d = 2
+    while d*d <= x:
+        while x % d == 0:
+            factors.append(d)
+            x //= d
+        d += 1 if d==2 else 2
+    if x>1:
+        factors.append(x)
+    return factors
 
