@@ -280,9 +280,6 @@ class ArithChannel(object):
   def generate_secret(self,poly_u):
     ri = RandIso(self.intmod,self.dim)
     m, invm = ri.generate(60)
-    print(f"m={m}")
-    print(f"invm={invm}")
-
     x = []
     m_t = np.transpose(m)
     for k in range(len(m)):
@@ -451,32 +448,10 @@ class ACESRefresher(object):
       xi = Polynomial(secret[i].coefs,self.intmod)
       secret_q.append(xi)
     refresher_secret = [(xi % ac.u)(arg=1) % ac.vanmod for xi in secret_q]
-    refresher_cipher_result = [ac.encrypt(r) for r in refresher_secret]
+    refresher_cipher_result = [self.encrypt(r) for r in refresher_secret]
     refresher_cipher,refresher_noise = zip(*refresher_cipher_result)
     return list(refresher_cipher),list(refresher_noise)
 
-  def refresh_inspector(self,cipher,secret):
-    # 1. decrypt((c_{1,i}),c'_{1,i} \circle_{\lamdda} (p_i,p_i'))=\gamma1(-ci)\gamma(xi)
-    Ccdec, Ccenc = self.generate_pseudocipertext(cipher)
-    refresher_cipher, refresher_noise = self.generate_refresher(self.ac, secret)
-
-    c1_i_tuple_wnoise = [self.encrypt(Ccdec_i % self.vanmod) for Ccdec_i in Ccdec]
-    c1_i_tuple = [c1_i for c1_i, _ in c1_i_tuple_wnoise ]
-    c2 = self.encrypt(Ccenc)
-    # 1. check
-    leftsum = 0
-    rightsum = 0
-    for i in range(len(c1_i_tuple)):
-      leftValue = self.decrypt(self.algebra.mult(c1_i_tuple[i],refresher_cipher[i]))
-      rightValue = Ccdec[i] % self.vanmod * self.gamma_1(secret[i])
-      print(f"leftValue{i}:{leftValue},rightValue{i}:{rightValue}")
-      leftsum += leftValue
-      rightsum += rightValue
-    print(f"leftsum:{leftsum % self.vanmod},rightsum:{rightsum % self.vanmod}")
-    # 2 scalar product
-    sp_result_cipher = self.scalar_product(c1_i_tuple,refresher_cipher)
-    sp_dec = self.decrypt(sp_result_cipher)
-    print(f"sp_dec:{sp_dec}")
   def refresh(self,cipher,secret):
     # 1. Encrypt each component x_i of secret (= refresher)
     refresher_cipher, refresher_noise = self.generate_refresher(self.ac, secret)
@@ -500,9 +475,6 @@ class ACESRefresher(object):
                                                      refresher_cipher,)
     # 6. above + c1_enc_cipher to homomorphic add
     result = self.algebra.add(pse_c1_enc_cipher, scalar_product_result_cipher)
-
-    # print(f"refresher_noise:{refresher_noise}")
-    # print(f"pse_c1_enc_noise:{pse_c1_enc_noise}")
 
     # 7.
     # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))

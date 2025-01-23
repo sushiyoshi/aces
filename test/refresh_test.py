@@ -39,8 +39,7 @@ def test_refresh():
     print(f"count: {count}")
 
     # refresh
-    ref.refresh_inspector(refreshable_ciph,ac.x)
-
+    # ref.refresh_inspector(refreshable_ciph,ac.x)
     new_ciph = ref.refresh(refreshable_ciph,ac.x)
     # refresh 後の復号
     plain_after = alice.decrypt(new_ciph)
