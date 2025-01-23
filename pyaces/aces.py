@@ -179,6 +179,8 @@ class ArithChannel(object):
     self.x, self.tensor = self.generate_secret(self.u)
     self.f0 = self.generate_initializer()
     self.f1, self.lvl_e,self.e = self.generate_noisy_key(anchor=anchor)
+    self.n_repartition = self.generate_n_repartition()
+    self.sigma_q_list = self.generate_sigma_q_list()
 
   def generate_vanisher(self, anchor = lambda i: random.randint(0,5)):
     e = []
@@ -214,8 +216,6 @@ class ArithChannel(object):
             )
             # f0[i][j] = ( q_factor * randpoly ) mod u
             row.append( multiplied % self.u )
-            # test
-            self.test(multiplied % self.u)
         f0.append(row)
     return f0
   def generate_noisy_key(self,anchor = lambda v : 0 if random.uniform(0,1) < 0.5 else 1):
@@ -262,15 +262,32 @@ class ArithChannel(object):
         u.extend([0] * decomp[i])
     u.extend([0] * (self.dim - len(u)+1))
     return Polynomial(u[::-1],self.intmod)
+  
+  def generate_n_repartition(self):
+    return [random.randint(0,len(self.q_list)-1) for _ in range(self.dim)]
 
+  def generate_sigma_q_list(self):
+    ret = []
+    for i in range(self.dim):
+      row = []
+      for j in range(self.dim):
+        if i==j:
+          row.append(self.intmod/self.q_list[self.n_repartition[j]])
+        else:
+          row.append(self.intmod/(self.q_list[self.n_repartition[i]] * self.q_list[self.n_repartition[j]]))
+      ret.append(row)
+    return ret
   def generate_secret(self,poly_u):
     ri = RandIso(self.intmod,self.dim)
     m, invm = ri.generate(60)
+    print(f"m={m}")
+    print(f"invm={invm}")
 
     x = []
     m_t = np.transpose(m)
     for k in range(len(m)):
       x.append(Polynomial(list(m_t[k]),self.intmod))
+    
     tensor = []
     # we will have a list/array: tensor[i][j][k]
     # e_{i,j} \in \mathbb{Z}_q[X]_u,[C](e) = 0 mod q
@@ -285,32 +302,9 @@ class ArithChannel(object):
           exit()
         a_ij = np.array(a_ij_poly.coefs[:self.dim] + [0] * (self.dim - len(a_ij_poly.coefs)) )
         result =(invm @ a_ij) % self.intmod
-        result[-1] = 4051*251
-        flag = False
-        for lamb in result:
-          for q_i in self.q_list:
-            if lamb % q_i == 0:
-              flag = True
-              # print("割り切れる素因数:", q_i)
-              break
-        if not flag:
-          print("\033[31m割り切れる素因数が見つかりませんでした\033[0m")
-          
         row.append(result)
       tensor.append(np.array(row))
     return x, np.array(tensor)
-  def test(self,zx):
-    result = (zx)(arg=1)
-    # print(f"[C](f0_i)={result % self.intmod}")
-    flag = False
-    for sigmaq in self.q_list:
-      if result % sigmaq == 0:
-        # print(f"[C](f0_i) is divisible by {sigmaq}")
-        flag = True
-        break
-    if not flag:
-      # テキストを赤くする
-      print(f"\033[31m割り切れませんでした\033[0m")
 class ACESCipher(object):
 
   def __init__(self,dec,enc,lvl):
@@ -377,7 +371,6 @@ class ACESReader(object):
     sum = 0
     for i in range(self.dim):
       cTx += c.dec[i] * self.x[i] % self.u
-      # test code
       sum = (sum + c.dec[i](arg=1) * self.x[i](arg=1) ) % self.intmod
     m_pre = c.enc + Polynomial([-1],self.intmod) * cTx
     correct_m = ( m_pre(arg=1) % self.intmod ) % self.vanmod
@@ -424,7 +417,7 @@ class ACESAlgebra(object):
     return lambda a: read_operations(self,instruction,a)
 
 class ACESRefresher(object):
-  def __init__(self,ac,algebra):
+  def __init__(self,ac,algebra,encrypt,decrypt):
     self.vanmod = ac.vanmod
     self.intmod = ac.intmod
     self.dim = ac.dim
@@ -432,6 +425,8 @@ class ACESRefresher(object):
     self.u = ac.u
     self.ac = ac
     self.algebra = algebra
+    self.encrypt = encrypt
+    self.decrypt = decrypt
 
   def add(self,a,b):
     return a+b
@@ -442,50 +437,80 @@ class ACESRefresher(object):
   def compile(self,instruction):
     return lambda a: read_operations(self,instruction,a)
   
+  def generate_pseudocipertext(self,cipher:ACESCipher):
+    #Here, the $n$-tuple $\intbrackets{\mathsf{C}}\tuplebrk{-c}$ is the tuple whose $i$-th coefficient is given by the following element in $\mathbb{Z}_q$.
+    # \[
+    # \intbrackets{\mathsf{C}}(-c_i) = -\intbrackets{\mathsf{C}}(c_i) = \pi_q(q - \iota_q(\intbrackets{\mathsf{C}}(c_i)))
+    # \]
+    C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in cipher.dec]
+    C_enc = cipher.enc(arg=1)
+    return C_negative_dec, C_enc  
   def generate_refresher(self,ac,secret):
     secret_q = []
     for i in range(self.dim):
       xi = Polynomial(secret[i].coefs,self.intmod)
       secret_q.append(xi)
-    refresher_secret = [(xi % ac.u)(arg=1) % ac.intmod % ac.vanmod for xi in secret_q]
+    refresher_secret = [(xi % ac.u)(arg=1) % ac.vanmod for xi in secret_q]
     refresher_cipher_result = [ac.encrypt(r) for r in refresher_secret]
-    refresher_cipher_cipher,refresher_cipher_noise = zip(*refresher_cipher_result)
-    return list(refresher_cipher_cipher),list(refresher_cipher_noise)
+    refresher_cipher,refresher_noise = zip(*refresher_cipher_result)
+    return list(refresher_cipher),list(refresher_noise)
 
+  def refresh_inspector(self,cipher,secret):
+    # 1. decrypt((c_{1,i}),c'_{1,i} \circle_{\lamdda} (p_i,p_i'))=\gamma1(-ci)\gamma(xi)
+    Ccdec, Ccenc = self.generate_pseudocipertext(cipher)
+    refresher_cipher, refresher_noise = self.generate_refresher(self.ac, secret)
+
+    c1_i_tuple_wnoise = [self.encrypt(Ccdec_i % self.vanmod) for Ccdec_i in Ccdec]
+    c1_i_tuple = [c1_i for c1_i, _ in c1_i_tuple_wnoise ]
+    c2 = self.encrypt(Ccenc)
+    # 1. check
+    leftsum = 0
+    rightsum = 0
+    for i in range(len(c1_i_tuple)):
+      leftValue = self.decrypt(self.algebra.mult(c1_i_tuple[i],refresher_cipher[i]))
+      rightValue = Ccdec[i] % self.vanmod * self.gamma_1(secret[i])
+      print(f"leftValue{i}:{leftValue},rightValue{i}:{rightValue}")
+      leftsum += leftValue
+      rightsum += rightValue
+    print(f"leftsum:{leftsum % self.vanmod},rightsum:{rightsum % self.vanmod}")
+    # 2 scalar product
+    sp_result_cipher = self.scalar_product(c1_i_tuple,refresher_cipher)
+    sp_dec = self.decrypt(sp_result_cipher)
+    print(f"sp_dec:{sp_dec}")
   def refresh(self,cipher,secret):
     # 1. Encrypt each component x_i of secret (= refresher)
-    refresher_cipher_cipher, refresher_cipher_noise = self.generate_refresher(self.ac, secret)
+    refresher_cipher, refresher_noise = self.generate_refresher(self.ac, secret)
 
     # 2. Extract pseudociphertext (c0, c1) of ciphertext cipher
     pse_c0, pse_c1 = self.generate_pseudocipertext(cipher) 
 
     # 3.integerize each component of c0+mod formatted
-    pse_c0 = [self.gamma_1(p) for p in pse_c0] # \gamma1 [C](-ci)
-    pse_c0_enc_tuple = [self.ac.encrypt(pse_c0[i]) for i in range(len(pse_c0))]
+    pse_c0 = [p % self.vanmod for p in pse_c0] # \gamma1 [C](-ci)
+    pse_c0_enc_tuple = [self.encrypt(pse_c0[i]) for i in range(len(pse_c0))]
     pse_c0_enc_cipher_tuple, pse_c0_enc_noise_tuple = [], []
     for txt, ns in pse_c0_enc_tuple:
         pse_c0_enc_cipher_tuple.append(txt)
         pse_c0_enc_noise_tuple.append(ns)
     # 4. c1 (scalar) encrypted
-    pse_c1 = self.gamma_1(pse_c1) # \gamma1 [C](c')
-    pse_c1_enc_cipher, pse_c1_enc_noise = self.ac.encrypt(pse_c1) 
+    pse_c1 = pse_c1 % self.vanmod # \gamma1 [C](c')
+    pse_c1_enc_cipher, pse_c1_enc_noise = self.encrypt(pse_c1) 
 
-    # 5. Calculates scalar product( c0_enc_tuple, refresher_cipher_cipher )
+    # 5. Calculates scalar product( c0_enc_tuple, refresher_cipher)
     scalar_product_result_cipher = self.scalar_product(pse_c0_enc_cipher_tuple,
-                                                     refresher_cipher_cipher)
+                                                     refresher_cipher,)
     # 6. above + c1_enc_cipher to homomorphic add
     result = self.algebra.add(pse_c1_enc_cipher, scalar_product_result_cipher)
 
-    # print(f"refresher_cipher_noise:{refresher_cipher_noise}")
+    # print(f"refresher_noise:{refresher_noise}")
     # print(f"pse_c1_enc_noise:{pse_c1_enc_noise}")
 
     # 7.
     # \kappa_0 &= \displaystyle p (k_2 +\sum_{i=1}^n (\kappa_i+k_{1,i} + \kappa_ik_{1,i}))
     kappa0 = self.vanmod * (
         sum(pse_c1_enc_noise)
-        + sum(sum(noise) for noise in refresher_cipher_noise) 
+        + sum(sum(noise) for noise in refresher_noise) 
         + sum(sum(ns) for ns in pse_c0_enc_noise_tuple)
-        + sum(sum(rf_noise)*sum(c0_noise) for rf_noise,c0_noise in zip(refresher_cipher_noise,pse_c0_enc_noise_tuple))
+        + sum(sum(rf_noise)*sum(c0_noise) for rf_noise,c0_noise in zip(refresher_noise,pse_c0_enc_noise_tuple))
     )
     # \kappa_1 &= \displaystyle \left\lfloor \frac{(p-1) + n(p-1)^2}{p} \right\rfloor
     kappa1 = int(((self.vanmod - 1) + self.dim*(self.vanmod - 1)**2) / self.vanmod)
@@ -504,17 +529,9 @@ class ACESRefresher(object):
     for i in range(1,len(a)):
       current = self.algebra.add(current,self.algebra.mult(a[i],b[i]))
     return current
-  
-  def generate_pseudocipertext(self,cipher:ACESCipher):
-    #Here, the $n$-tuple $\intbrackets{\mathsf{C}}\tuplebrk{-c}$ is the tuple whose $i$-th coefficient is given by the following element in $\mathbb{Z}_q$.
-    # \[
-    # \intbrackets{\mathsf{C}}(-c_i) = -\intbrackets{\mathsf{C}}(c_i) = \pi_q(q - \iota_q(\intbrackets{\mathsf{C}}(c_i)))
-    # \]
-    C_negative_dec = [(self.intmod-(ci % self.u)(arg=1)) % self.intmod for ci in cipher.dec]
-    C_enc = cipher.enc(arg=1)
-    return C_negative_dec, C_enc
+
   def gamma_1(self,zq):
-    return zq % self.vanmod % self.intmod
+    return zq(arg=1) % self.vanmod % self.intmod
 
   def is_refreshable(self,cipher,secret):
     ps_c0, ps_c1 = self.generate_pseudocipertext(cipher)

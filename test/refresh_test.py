@@ -21,7 +21,7 @@ def test_refresh():
     ciph, noise_vector = bob.encrypt(m)
     print("[*] original ciphertext uplvl =", ciph.uplvl)
     alg = ACESAlgebra(vanmod,intmod,dim,u,tensor)
-    ref = ACESRefresher(bob, alg)
+    ref = ACESRefresher(bob, alg,bob.encrypt,alice.decrypt)
 
     ps_c0,ps_c1 = ref.generate_pseudocipertext(ciph)
     ps_c0 = [p % intmod for p in ps_c0]
@@ -39,6 +39,8 @@ def test_refresh():
     print(f"count: {count}")
 
     # refresh
+    ref.refresh_inspector(refreshable_ciph,ac.x)
+
     new_ciph = ref.refresh(refreshable_ciph,ac.x)
     # refresh 後の復号
     plain_after = alice.decrypt(new_ciph)
