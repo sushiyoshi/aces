@@ -80,6 +80,8 @@ class Polynomial(object):
 
 import math
 from functools import reduce
+def random_polycoef(intmod, size):
+    return [random.randrange(intmod) for _ in range(size)]
 
 def extended_gcd(a, b):
     r = [a,b]
@@ -176,11 +178,13 @@ class ArithChannel(object):
     self.q_list = factor_intmod(self.intmod)
     print(f"q_list={self.q_list}")
     self.u = self.generate_u()
+    self.n_repartition = self.generate_n_repartition()
+    print(f"n_repartition={self.n_repartition}")
+    self.sigma_q_list = self.generate_sigma_q_list()
+    print(f"sigma_q_list={self.sigma_q_list}")
     self.x, self.tensor = self.generate_secret(self.u)
     self.f0 = self.generate_initializer()
     self.f1, self.lvl_e,self.e = self.generate_noisy_key(anchor=anchor)
-    self.n_repartition = self.generate_n_repartition()
-    self.sigma_q_list = self.generate_sigma_q_list()
 
   def generate_vanisher(self, anchor = lambda i: random.randint(0,5)):
     e = []
@@ -272,9 +276,17 @@ class ArithChannel(object):
       row = []
       for j in range(self.dim):
         if i==j:
-          row.append(self.intmod/self.q_list[self.n_repartition[j]])
+          sigma_i = self.n_repartition[i]
+          q_sigma_i = self.q_list[sigma_i]
+          print(f"q_sigma_i={q_sigma_i},q/q_sigma_i={self.intmod/q_sigma_i}")
+          row.append(self.intmod/(q_sigma_i))
         else:
-          row.append(self.intmod/(self.q_list[self.n_repartition[i]] * self.q_list[self.n_repartition[j]]))
+          sigma_i =self.n_repartition[i]
+          sigma_j =self.n_repartition[j]
+          q_sigma_i = self.q_list[sigma_i]
+          q_sigma_j = self.q_list[sigma_j]
+          print(f"q_sigma_i={q_sigma_i},q_sigma_j={q_sigma_j},q/(q_sigma_i*q_sigma_j)={self.intmod/(q_sigma_i*q_sigma_j)}")
+          row.append(self.intmod/(q_sigma_i*q_sigma_j))
       ret.append(row)
     return ret
   def generate_secret(self,poly_u):
@@ -302,8 +314,8 @@ class ArithChannel(object):
         row.append(result)
       tensor.append(np.array(row))
     return x, np.array(tensor)
+    
 class ACESCipher(object):
-
   def __init__(self,dec,enc,lvl):
     self.dec = dec
     self.enc = enc
@@ -537,3 +549,46 @@ def factor_intmod(q):
         factors.append(x)
     return factors
 
+class ZeroDivisorIdealTester:
+    """
+    ここでは「(x_i * x_j) mod u」と
+    「sum_k tensor[i][j][k] * x_k (mod u)」が一致するかを
+    全部の i,j について判定するサンプル例を示す。
+    論文の 'zero-divisor ideal' とは厳密には違うが、
+    少なくとも生成された tensor が "乗算テーブル" として
+    正しいかのチェックにはなる。
+    """
+    def __init__(self, x_list, tensor, u_poly):
+        """
+        x_list: [x_0, x_1, ..., x_{dim-1}] 多項式のリスト
+        tensor: shape (dim, dim, dim) の np.array等
+        u_poly: 多項式モジュラス (Polynomial)
+        """
+        self.x_list = x_list       # 各 x_i
+        self.tensor = tensor       # tensor[i][j] = array of size dim
+        self.u_poly = u_poly
+        self.dim = len(x_list)
+
+    def check_all(self):
+        """全 i,j について "x_i*x_j mod u = sum_k tensor[i][j][k]*x_k mod u" かを判定"""
+        for i in range(self.dim):
+            for j in range(self.dim):
+                # 左辺(LHS): x_i*x_j mod u
+                lhs = (self.x_list[i] * self.x_list[j]) % self.u_poly
+
+                # 右辺(RHS): sum_k (tensor[i][j][k]* x_k) mod u
+                rhs = Polynomial([0], self.x_list[0].intmod)  # 0多項式
+                for k in range(self.dim):
+                    # tensor[i][j][k] は int なので Polynomialに変換して掛ける
+                    coef_poly = Polynomial([self.tensor[i][j][k]], self.x_list[0].intmod)
+                    rhs = (rhs + (coef_poly * self.x_list[k])) % self.u_poly
+
+                # 一致判定
+                if degree(lhs) != degree(rhs):
+                    return False
+                # 係数がすべて一致するか
+                if lhs.coefs != rhs.coefs:
+                    return False
+
+        # すべて合格
+        return True

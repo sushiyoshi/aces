@@ -43,7 +43,6 @@ def read_operations(alg,instruction,array,level=0):
 
 
 class Algebra(object):
-
   @staticmethod
   def add(a,b):
     return a+b

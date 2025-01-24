@@ -23,6 +23,9 @@ def test_refresh():
     alg = ACESAlgebra(vanmod,intmod,dim,u,tensor)
     ref = ACESRefresher(bob, alg,bob.encrypt,alice.decrypt)
 
+    tensor_tester = ZeroDivisorIdealTester(ac.x,ac.tensor,ac.u)
+    print("[*] tensor tester =", tensor_tester.check_all())
+
     ps_c0,ps_c1 = ref.generate_pseudocipertext(ciph)
     ps_c0 = [p % intmod for p in ps_c0]
     ps_c1 = ps_c1 % intmod

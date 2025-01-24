@@ -13,9 +13,9 @@ from pyaces import *
 def main():
     # パラメータ
     vanmod = 32
-    intmod = 32**5 + 1
-    dim = 10
-    N = 5
+    intmod = 32**6 + 1
+    dim = 3
+    N = 3
 
     # チャネル初期化
     ac = ArithChannel(vanmod,intmod,dim,N)
